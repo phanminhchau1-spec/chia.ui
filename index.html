@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>CHI-A Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background-color: #1a1a1a; color: white; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; }
+        .header { font-size: 28px; font-weight: bold; margin-bottom: 5px; }
+        .sub-header { color: #aaaaaa; font-size: 14px; margin-bottom: 20px; }
+        .input-container { display: flex; justify-content: center; max-width: 500px; margin: 0 auto 20px; gap: 10px; }
+        input[type="text"] { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #fff; color: #000; font-size: 16px; }
+        .btn-send { background-color: #1D61E7; color: white; border: none; padding: 0 20px; border-radius: 8px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+        .button-group { display: flex; justify-content: center; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
+        button { background-color: #3a3a3a; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+        button.active { background-color: #e74c3c; }
+        #status { color: #888; margin-top: 20px; font-size: 16px; }
+        #answer { font-size:18px; margin:20px auto; padding:15px; background:#2a2a2a; border-radius:10px; max-width:500px; text-align:left; }
+        #photo { display:none; width:100%; max-width:500px; margin:15px auto; border-radius:10px; }
+    </style>
+</head>
+<body>
+
+    <div class="header">CHI-A</div>
+    <div class="sub-header">OV5640 + Gemini + MAX98357A</div>
+
+    <div class="input-container">
+        <input type="text" id="textQuery" placeholder="can you introduce yourself in english?">
+        <button class="btn-send" onclick="askText()">📩 Send</button>
+    </div>
+
+    <div class="button-group">
+        <button id="cameraButton" onclick="askText()">📷 Ask Camera</button>
+        <button id="voiceButton" onclick="askVoice()">🎤 Ask Voice</button>
+        <button id="iphoneButton" onclick="iphoneMic()">📱 iPhone Microphone</button>
+    </div>
+
+    <div id="status">Ready.</div>
+    <img id="photo">
+    <div id="answer">Ready.</div>
+
+    <script>
+        const ESP_IP = "http://192.168.1.38";
+        const WS_IP  = "ws://192.168.1.38/ws";
+
+        let ws;
+        let audioContext;
+        let processor;
+        let localStream;
+        const micBtn = document.getElementById('iphoneButton');
+        const statusLabel = document.getElementById('status');
+
+        function initWebSocket() {
+            ws = new WebSocket(WS_IP);
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => { statusLabel.innerText = "Connected to CHI-A."; };
+            ws.onclose = () => { statusLabel.innerText = "Disconnected. Reconnecting..."; setTimeout(initWebSocket, 2000); };
+        }
+
+        function showCameraImage(){
+            document.getElementById("status").innerText="📷 Taking picture...";
+            document.getElementById("photo").src = ESP_IP + "/capture?t=" + Date.now();
+            document.getElementById("photo").style.display="block";
+        }
+
+        async function askText(){
+            let q=document.getElementById("textQuery").value;
+            if(!q) q="What do you see in this picture?";
+            document.getElementById("answer").innerText="";
+            showCameraImage();
+            try{
+                let r=await fetch(ESP_IP + "/ask?q=" + encodeURIComponent(q));
+                let d=await r.json();
+                showResult(d);
+            }catch(e){ statusLabel.innerText="Connection error."; }
+        }
+
+        async function askVoice(){
+            statusLabel.innerText="🎤 Listening (INMP441) for 4s...";
+            document.getElementById("answer").innerText="";
+            showCameraImage();
+            try{
+                let r=await fetch(ESP_IP + "/askvoice");
+                let d=await r.json();
+                showResult(d);
+            }catch(e){ statusLabel.innerText="Connection error."; }
+        }
+
+        async function iphoneMic() {
+            if (!navigator.mediaDevices) navigator.mediaDevices = {};
+            if (!navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia = function(constraints) {
+                    const getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+                    if (!getUserMedia) {
+                        return Promise.reject(new Error("getUserMedia is not supported on this browser context."));
+                    }
+                    return new Promise((resolve, reject) => {
+                        getUserMedia.call(navigator, constraints, resolve, reject);
+                    });
+                };
+            }
+
+            if (!audioContext) {
+                try {
+                    await fetch(ESP_IP + '/start_iphone_rec');
+                    showCameraImage();
+
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    const source = audioContext.createMediaStreamSource(localStream);
+                    
+                    processor = audioContext.createScriptProcessor(4096, 1, 1);
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+
+                    processor.onaudioprocess = (e) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            const pcmData = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                            }
+                            ws.send(pcmData.buffer);
+                        }
+                    };
+
+                    micBtn.classList.add('active');
+                    micBtn.innerHTML = "🔴 Stop Microphone";
+                    statusLabel.innerText = "📱 Streaming iPhone mic to CHI-A...";
+
+                } catch (err) {
+                    alert("Microphone error: " + err);
+                }
+            } else {
+                if (processor) processor.disconnect();
+                if (localStream) localStream.getTracks().forEach(track => track.stop());
+                if (audioContext) audioContext.close();
+                audioContext = null;
+                
+                micBtn.classList.remove('active');
+                micBtn.innerHTML = "📱 iPhone Microphone";
+                statusLabel.innerText = "Processing iPhone audio with Gemini...";
+
+                try {
+                    let r = await fetch(ESP_IP + '/stop_iphone_rec');
+                    let d = await r.json();
+                    showResult(d);
+                } catch(e) { statusLabel.innerText = "Processing error."; }
+            }
+        }
+
+        function showResult(d){
+            document.getElementById("answer").innerText = d.answer || d.error || "No response.";
+            statusLabel.innerText = d.voice ? "CHI-A Speaking..." : "Ready.";
+        }
+
+        window.onload = initWebSocket;
+    </script>
+</body>
+</html>
