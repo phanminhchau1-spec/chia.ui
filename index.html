@@ -3,7 +3,6 @@
 <head>
     <meta charset="utf-8">
     <title>CHI-A Dashboard</title>
-    
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { background-color: #1a1a1a; color: white; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; }
@@ -41,21 +40,21 @@
     <div id="answer">Ready.</div>
 
     <script>
-        const ESP_IP = "http://192.168.1.38";
-        const WS_IP  = "ws://192.168.1.38/ws";
+        var ESP_IP = "http://192.168.1.38";
+        var WS_IP  = "ws://192.168.1.38/ws";
 
-        let ws;
-        let audioContext;
-        let processor;
-        let localStream;
-        const micBtn = document.getElementById('iphoneButton');
-        const statusLabel = document.getElementById('status');
+        var ws;
+        var audioContext;
+        var processor;
+        var localStream;
+        var micBtn = document.getElementById('iphoneButton');
+        var statusLabel = document.getElementById('status');
 
         function initWebSocket() {
             ws = new WebSocket(WS_IP);
             ws.binaryType = 'arraybuffer';
-            ws.onopen = () => { statusLabel.innerText = "Connected to CHI-A."; };
-            ws.onclose = () => { statusLabel.innerText = "Disconnected. Reconnecting..."; setTimeout(initWebSocket, 2000); };
+            ws.onopen = function() { statusLabel.innerText = "Connected to CHI-A."; };
+            ws.onclose = function() { statusLabel.innerText = "Disconnected. Reconnecting..."; setTimeout(initWebSocket, 2000); };
         }
 
         function showCameraImage(){
@@ -64,61 +63,79 @@
             document.getElementById("photo").style.display="block";
         }
 
-        async function askText(){
-            let q=document.getElementById("textQuery").value;
-            if(!q) q="What do you see in this picture?";
-            document.getElementById("answer").innerText="";
+        function askText(){
+            var q = document.getElementById("textQuery").value;
+            if(!q) q = "What do you see in this picture?";
+            document.getElementById("answer").innerText = "";
             showCameraImage();
-            try{
-                let r=await fetch(ESP_IP + "/ask?q=" + encodeURIComponent(q));
-                let d=await r.json();
-                showResult(d);
-            }catch(e){ statusLabel.innerText="Connection error."; }
+            
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", ESP_IP + "/ask?q=" + encodeURIComponent(q), true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    showResult(JSON.parse(xhr.responseText));
+                } else {
+                    statusLabel.innerText = "Connection error.";
+                }
+            };
+            xhr.onerror = function() { statusLabel.innerText = "Connection error."; };
+            xhr.send();
         }
 
-        async function askVoice(){
-            statusLabel.innerText="🎤 Listening (INMP441) for 4s...";
-            document.getElementById("answer").innerText="";
+        function askVoice(){
+            statusLabel.innerText = "🎤 Listening (INMP441) for 4s...";
+            document.getElementById("answer").innerText = "";
             showCameraImage();
-            try{
-                let r=await fetch(ESP_IP + "/askvoice");
-                let d=await r.json();
-                showResult(d);
-            }catch(e){ statusLabel.innerText="Connection error."; }
+            
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", ESP_IP + "/askvoice", true);
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    showResult(JSON.parse(xhr.responseText));
+                } else {
+                    statusLabel.innerText = "Connection error.";
+                }
+            };
+            xhr.onerror = function() { statusLabel.innerText = "Connection error."; };
+            xhr.send();
         }
 
-        async function iphoneMic() {
-            if (!navigator.mediaDevices) navigator.mediaDevices = {};
-            if (!navigator.mediaDevices.getUserMedia) {
-                navigator.mediaDevices.getUserMedia = function(constraints) {
-                    const getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-                    if (!getUserMedia) {
-                        return Promise.reject(new Error("getUserMedia is not supported on this browser context."));
-                    }
-                    return new Promise((resolve, reject) => {
-                        getUserMedia.call(navigator, constraints, resolve, reject);
-                    });
+        function iphoneMic() {
+            var getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+
+            if (!getUserMedia && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                getUserMedia = function(constraints, success, failure) {
+                    navigator.mediaDevices.getUserMedia(constraints).then(success).catch(failure);
                 };
             }
 
-            if (!audioContext) {
-                try {
-                    await fetch(ESP_IP + '/start_iphone_rec');
-                    showCameraImage();
+            if (!getUserMedia) {
+                alert("Microphone streaming is not supported on this device/browser.");
+                return;
+            }
 
-                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                    const source = audioContext.createMediaStreamSource(localStream);
-                    
+            if (!audioContext) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("GET", ESP_IP + '/start_iphone_rec', true);
+                xhr.send();
+
+                showCameraImage();
+
+                getUserMedia.call(navigator, { audio: true, video: false }, function(stream) {
+                    localStream = stream;
+                    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    audioContext = new AudioCtx({ sampleRate: 16000 });
+                    var source = audioContext.createMediaStreamSource(localStream);
+
                     processor = audioContext.createScriptProcessor(4096, 1, 1);
                     source.connect(processor);
                     processor.connect(audioContext.destination);
 
-                    processor.onaudioprocess = (e) => {
+                    processor.onaudioprocess = function(e) {
                         if (ws && ws.readyState === WebSocket.OPEN) {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            const pcmData = new Int16Array(inputData.length);
-                            for (let i = 0; i < inputData.length; i++) {
+                            var inputData = e.inputBuffer.getChannelData(0);
+                            var pcmData = new Int16Array(inputData.length);
+                            for (var i = 0; i < inputData.length; i++) {
                                 pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
                             }
                             ws.send(pcmData.buffer);
@@ -128,25 +145,35 @@
                     micBtn.classList.add('active');
                     micBtn.innerHTML = "🔴 Stop Microphone";
                     statusLabel.innerText = "📱 Streaming iPhone mic to CHI-A...";
-
-                } catch (err) {
-                    alert("Microphone error: " + err);
-                }
+                }, function(err) {
+                    alert("Microphone permission denied or error: " + err);
+                });
             } else {
                 if (processor) processor.disconnect();
-                if (localStream) localStream.getTracks().forEach(track => track.stop());
+                if (localStream) {
+                    var tracks = localStream.getTracks();
+                    for (var t = 0; t < tracks.length; t++) {
+                        tracks[t].stop();
+                    }
+                }
                 if (audioContext) audioContext.close();
                 audioContext = null;
-                
+
                 micBtn.classList.remove('active');
                 micBtn.innerHTML = "📱 iPhone Microphone";
                 statusLabel.innerText = "Processing iPhone audio with Gemini...";
 
-                try {
-                    let r = await fetch(ESP_IP + '/stop_iphone_rec');
-                    let d = await r.json();
-                    showResult(d);
-                } catch(e) { statusLabel.innerText = "Processing error."; }
+                var stopXhr = new XMLHttpRequest();
+                stopXhr.open("GET", ESP_IP + '/stop_iphone_rec', true);
+                stopXhr.onload = function() {
+                    if (stopXhr.status === 200) {
+                        showResult(JSON.parse(stopXhr.responseText));
+                    } else {
+                        statusLabel.innerText = "Processing error.";
+                    }
+                };
+                stopXhr.onerror = function() { statusLabel.innerText = "Processing error."; };
+                stopXhr.send();
             }
         }
 
